@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AuthentiChain</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+<style>
+:root{--bg:#0b0f1a;--card:#141b2d;--line:#24304d;--tx:#e8ecf6;--mu:#8a96b5;--ac:#6c8cff;--ok:#2fd18b;--wa:#f5b942;--no:#ff6b6b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f3f5fb;--card:#fff;--line:#dde3f2;--tx:#141b2d;--mu:#5d6985}}
+:root[data-theme="dark"]{--bg:#0b0f1a}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+.app{max-width:480px;margin:0 auto;padding:16px 16px 90px}
+h1{font-size:20px;margin:4px 0 2px;display:flex;gap:8px;align-items:center}h1 span{color:var(--ac)}
+.sub{color:var(--mu);font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.btn{width:100%;border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:600;background:var(--ac);color:#fff}
+.btn.sec{background:transparent;border:1px solid var(--line);color:var(--tx)}
+.btn:disabled{opacity:.5}
+video,.prev{width:100%;border-radius:12px;background:#000;aspect-ratio:3/4;object-fit:cover;display:block}
+.nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+.nav button{flex:1;background:none;border:0;color:var(--mu);padding:12px 0;font-size:12px}
+.nav button b{display:block;font-size:20px}.nav .on{color:var(--ac)}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;word-break:break-all;color:var(--mu)}
+.row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)}.row:last-child{border:0}
+.row i{font-style:normal;color:var(--mu);font-size:12px;white-space:nowrap}.row div{text-align:right;min-width:0}
+.badge{display:inline-block;border-radius:99px;padding:5px 12px;font-weight:700;font-size:13px}
+.v{border-left:5px solid;border-radius:12px;padding:12px;margin-bottom:10px}
+.v.ok{border-color:var(--ok);background:rgba(47,209,139,.12)}.v.wa{border-color:var(--wa);background:rgba(245,185,66,.12)}.v.no{border-color:var(--no);background:rgba(255,107,107,.12)}
+.v h3{margin:0 0 4px;font-size:17px}
+.blk{border-left:3px solid var(--ac);padding:2px 0 2px 10px;margin:8px 0}
+.hide{display:none}.tiny{font-size:12px;color:var(--mu)}
+img.th{width:100%;border-radius:10px;margin-bottom:8px}
+</style></head><body><div class="app">
+<h1>🔗 <span>Authenti</span>Chain</h1>
+<div class="sub">Capture-only provenance · SHA-256 + pHash · simulated on-chain registry</div>
+
+<section id="p-cap">
+ <div class="card"><div class="tiny" id="wal"></div></div>
+ <div class="card" id="camBox">
+  <video id="vid" autoplay playsinline muted class="hide"></video>
+  <img id="shot" class="prev hide" alt="">
+  <div class="tiny" id="camMsg" style="margin:8px 0">Live camera only — there is no gallery or upload option for registration.</div>
+  <button class="btn" id="bCam">Open camera</button>
+  <button class="btn hide" id="bSnap">📸 Capture &amp; register</button>
+ </div>
+ <div id="receipt"></div>
+</section>
+
+<section id="p-ver" class="hide">
+ <div class="card">
+  <div class="tiny" style="margin-bottom:8px">Pick any image (original, resized, recompressed, filtered, lightly cropped…). Verification needs no account.</div>
+  <input type="file" accept="image/*" id="fIn" class="hide">
+  <button class="btn" onclick="fIn.click()">Choose image to verify</button>
+ </div>
+ <div id="vres"></div>
+</section>
+
+<section id="p-chain" class="hide"><div id="chainView"></div>
+ <button class="btn sec" id="bReset">Reset demo chain</button></section>
+</div>
+<div class="nav"><button class="on" data-t="cap"><b>📷</b>Register</button><button data-t="ver"><b>🔍</b>Verify</button><button data-t="chain"><b>⛓️</b>Chain</button></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const T=0, THRESH=10, WINDOW=256;
+// ---------- storage ----------
+const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
+const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){console.warn(e)}};
+// ---------- crypto helpers ----------
+const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+const sha=async data=>hex(await crypto.subtle.digest('SHA-256',typeof data==='string'?new TextEncoder().encode(data):data));
+// ---------- pHash (DCT, 32x32 -> 8x8, minus DC, median) ----------
+function phash(src,w,h){
+ const c=document.createElement('canvas');c.width=c.height=32;const x=c.getContext('2d');
+ x.drawImage(src,0,0,w,h,0,0,32,32);const d=x.getImageData(0,0,32,32).data,g=[];
+ for(let i=0;i<32;i++){g[i]=[];for(let j=0;j<32;j++){const p=(i*32+j)*4;g[i][j]=.299*d[p]+.587*d[p+1]+.114*d[p+2]}}
+ const co=[];for(let k=0;k<32;k++){co[k]=[];for(let n=0;n<32;n++)co[k][n]=Math.cos((2*n+1)*k*Math.PI/64)}
+ const dct=(u,v)=>{let s=0;for(let i=0;i<32;i++)for(let j=0;j<32;j++)s+=g[i][j]*co[u][i]*co[v][j];return s};
+ const f=[];for(let u=0;u<8;u++)for(let v=0;v<8;v++)if(u||v)f.push(dct(u,v));
+ const m=[...f].sort((a,b)=>a-b)[31];let bits='0'+f.map(v=>v>m?1:0).join('');
+ return BigInt('0b'+bits).toString(16).padStart(16,'0');
+}
+const ham=(a,b)=>{let x=BigInt('0x'+a)^BigInt('0x'+b),n=0;while(x){n+=Number(x&1n);x>>=1n}return n};
+// ---------- simulated blockchain + smart contract ----------
+let chain=ld('ac_chain',null);
+async function mine(txs){
+ const p=chain.blocks[chain.blocks.length-1];
+ const b={n:p.n+1,prev:p.hash,ts:Date.now(),txs:txs||[]};
+ b.hash='0x'+await sha(b.prev+b.n+b.ts+JSON.stringify(b.txs));
+ chain.blocks.push(b);
+ chain.blocks=chain.blocks.filter((k,i,a)=>k.txs.length||i>=a.length-300||k.n===0);
+ return b;
+}
+async function initChain(){
+ if(chain)return;
+ chain={blocks:[{n:0,prev:'0x0',ts:Date.now(),txs:[],hash:'0x'+await sha('genesis')}],records:{},log:[],admin:null,whitelist:[]};
+ for(let i=0;i<3;i++)await mine();sv('ac_chain',chain);
+}
+setInterval(async()=>{if(chain){await mine();}},4000); // ~4 s block time (empty blocks kept in memory)
+const head=()=>chain.blocks[chain.blocks.length-1];
+const blockHash=n=>(chain.blocks.find(b=>b.n===n)||{}).hash;
+const msgOf=r=>['AuthentiChain',r.sha,r.phash,r.source,r.blockNum,r.blockHash].join('|');
+// contract.register(): whitelist -> duplicate -> freshness -> ECDSA (EIP-191) -> store
+async function register(r,sig,sender){
+ if(!chain.whitelist.includes(sender))throw 'Not an authorised creator';
+ if(chain.records[r.sha])throw 'Duplicate SHA-256: already registered';
+ if(head().n-r.blockNum>WINDOW||blockHash(r.blockNum)!==r.blockHash)throw 'Stale or invalid block reference';
+ if(ethers.utils.verifyMessage(msgOf(r),sig)!==sender)throw 'Signature does not match caller';
+ const blk=await mine([{type:'register',sha:r.sha}]);
+ chain.records[r.sha]={...r,sig,creator:sender,regBlock:blk.n,regBlockHash:blk.hash,ts:blk.ts};
+ sv('ac_chain',chain);return chain.records[r.sha];
+}
+async function verify(sha_,ph){
+ let out;const rec=chain.records[sha_];
+ if(rec)out={kind:'exact',rec,dist:0};
+ else{let best=null;for(const k in chain.records){const d=ham(ph,chain.records[k].phash);if(!best||d<best.d)best={d,k}}
+  out=best&&best.d<=THRESH?{kind:'perceptual',rec:chain.records[best.k],dist:best.d}:{kind:'none',closest:best&&best.d}}
+ const blk=await mine([{type:'verify',sha:sha_.slice(0,10),res:out.kind}]);
+ chain.log.push({ts:blk.ts,sha:sha_,res:out.kind,block:blk.n});sv('ac_chain',chain);return out;
+}
+// ---------- wallet ----------
+let wallet;
+function initWallet(){
+ let pk=ld('ac_pk',null);if(!pk){pk=ethers.Wallet.createRandom().privateKey;sv('ac_pk',pk)}
+ wallet=new ethers.Wallet(pk);
+ if(!chain.admin){chain.admin='demo-admin';}
+ if(!chain.whitelist.includes(wallet.address)){chain.whitelist.push(wallet.address);sv('ac_chain',chain)}
+ $('wal').innerHTML='🔑 Wallet <span class="mono">'+wallet.address+'</span><br>Whitelisted creator · key never leaves this device';
+}
+// ---------- UI helpers ----------
+const short=(s,n=10)=>s.length>2*n+3?s.slice(0,n)+'…'+s.slice(-n):s;
+const row=(k,v)=>`<div class="row"><i>${k}</i><div class="mono">${v}</div></div>`;
+const when=t=>new Date(t).toLocaleString();
+function recCard(r,title){
+ return `<div class="card">${title||''}<img class="th" src="${r.thumb}" alt="">
+ ${row('Creator',short(r.creator,8))}${row('SHA-256',short(r.sha,12))}${row('pHash (64-bit)',r.phash)}
+ ${row('IPFS CID (sim.)',short(r.cid,10))}${row('Capture source',r.source)}
+ ${row('Capture block interval','#'+r.blockNum+' → #'+r.regBlock)}${row('Registered in block','#'+r.regBlock)}
+ ${row('Block hash',short(r.regBlockHash,10))}${row('Timestamp',when(r.ts))}${row('Signature',short(r.sig,10))}</div>`;
+}
+// ---------- tabs ----------
+document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('on',x===b));
+ ['cap','ver','chain'].forEach(t=>$('p-'+t).classList.toggle('hide',t!==b.dataset.t));
+ if(b.dataset.t!=='cap')stopCam();if(b.dataset.t==='chain')renderChain();
+});
+// ---------- capture ----------
+let stream=null,ref=null;
+function stopCam(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}$('vid').classList.add('hide');$('bSnap').classList.add('hide');$('bCam').classList.remove('hide')}
+$('bCam').onclick=async()=>{
+ try{
+  ref={n:head().n,hash:head().hash}; // freshness challenge read BEFORE camera opens
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false});
+  $('vid').srcObject=stream;$('vid').classList.remove('hide');$('shot').classList.add('hide');
+  $('bCam').classList.add('hide');$('bSnap').classList.remove('hide');
+  $('camMsg').textContent='Freshness challenge: block #'+ref.n+' '+short(ref.hash,6);
+ }catch(e){$('camMsg').textContent='Camera unavailable: '+(e.message||e)+'. Allow camera permission (HTTPS required).'}
+};
+$('bSnap').onclick=async()=>{
+ const v=$('vid');if(!v.videoWidth)return;$('bSnap').disabled=true;
+ try{
+  const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+  const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.92));
+  const bytes=await blob.arrayBuffer(),s=await sha(bytes),ph=phash(c,c.width,c.height); // hashed in memory
+  const t=document.createElement('canvas');t.width=240;t.height=Math.round(240*c.height/c.width);t.getContext('2d').drawImage(c,0,0,t.width,t.height);
+  const full=URL.createObjectURL(blob);
+  const r={sha:s,phash:ph,source:'live-camera',blockNum:ref.n,blockHash:ref.hash};
+  const sig=await wallet.signMessage(msgOf(r));
+  r.cid='bafy'+s.slice(0,44);r.thumb=t.toDataURL('image/jpeg',.6);
+  stopCam();$('shot').src=full;$('shot').classList.remove('hide');
+  const rec=await register(r,sig,wallet.address);
+  $('camMsg').textContent='Registered ✔';
+  const fname='authentichain-'+s.slice(0,8)+'.jpg';
+  $('receipt').innerHTML=`<div class="v ok"><h3>✅ Recorded on-chain</h3>Block #${rec.regBlock}. Save this exact photo, then upload it on the Verify tab for an exact match.</div>
+  <div class="card"><button class="btn" id="bDl">⬇️ Save original photo</button>
+  <button class="btn sec hide" id="bSh" style="margin-top:8px">📲 Share / Save to Photos</button>
+  <div class="tiny" style="margin-top:8px">Saves the byte-identical file that was hashed. Edited or re-compressed copies will give a perceptual match instead.</div></div>`+recCard(rec);
+  $('bDl').onclick=()=>{const a=document.createElement('a');a.href=full;a.download=fname;document.body.appendChild(a);a.click();a.remove()};
+  const file=new File([blob],fname,{type:'image/jpeg'});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){$('bSh').classList.remove('hide');$('bSh').onclick=()=>navigator.share({files:[file],title:'AuthentiChain capture'}).catch(()=>{})}
+ }catch(e){$('receipt').innerHTML=`<div class="v no"><h3>Registration rejected</h3>${e.message||e}</div>`;stopCam()}
+ $('bSnap').disabled=false;
+};
+// ---------- verify ----------
+$('fIn').onchange=async e=>{
+ const f=e.target.files[0];if(!f)return;$('vres').innerHTML='<div class="card tiny">Hashing…</div>';
+ try{
+  const s=await sha(await f.arrayBuffer()),url=URL.createObjectURL(f),im=new Image();
+  await new Promise((ok,er)=>{im.onload=ok;im.onerror=er;im.src=url});
+  const ph=phash(im,im.naturalWidth,im.naturalHeight),o=await verify(s,ph);
+  const q=`<div class="card"><img class="th" src="${url}" alt="">${row('SHA-256',short(s,12))}${row('pHash',ph)}</div>`;
+  if(o.kind==='exact')$('vres').innerHTML=`<div class="v ok"><h3>✅ Exact match</h3>Byte-identical to a registered capture.</div>`+q+recCard(o.rec,'<b>Blockchain record</b>');
+  else if(o.kind==='perceptual')$('vres').innerHTML=`<div class="v wa"><h3>🟡 Perceptual match — likely edited copy</h3>Hamming distance ${o.dist}/64 (threshold ≤ ${THRESH}) · similarity ${Math.round((64-o.dist)/64*100)}%</div>`+q+recCard(o.rec,'<b>Closest registered original</b>');
+  else $('vres').innerHTML=`<div class="v no"><h3>⚪ No provenance record</h3>This only means the image was never registered. It does <b>not</b> say it is AI-generated.${o.closest!=null?'<br>Closest distance: '+o.closest+'/64':''}</div>`+q;
+ }catch(err){$('vres').innerHTML='<div class="v no">Could not read that image.</div>'}
+ e.target.value='';
+};
+// ---------- chain explorer ----------
+function renderChain(){
+ const recs=Object.values(chain.records).reverse();
+ $('chainView').innerHTML=`<div class="card">${row('Head block','#'+head().n)}${row('Registered captures',recs.length)}${row('Verification attempts',chain.log.length)}${row('Network','Simulated EVM-style test chain')}</div>`
+ +'<div class="card"><b>Records</b>'+(recs.map(r=>`<div class="blk"><img src="${r.thumb}" style="width:56px;border-radius:6px;float:right;margin-left:8px" alt=""><b>Block #${r.regBlock}</b><div class="mono">sha ${short(r.sha,8)}<br>pHash ${r.phash}</div><div style="clear:both"></div></div>`).join('')||'<div class="tiny">No records yet.</div>')+'</div>'
+ +'<div class="card"><b>Append-only verification log</b>'+(chain.log.slice(-15).reverse().map(l=>`<div class="blk"><div class="mono">#${l.block} · ${l.res.toUpperCase()}<br>${short(l.sha,8)}</div></div>`).join('')||'<div class="tiny">No verifications yet.</div>')+'</div>';
+}
+$('bReset').onclick=async()=>{if(!confirm('Erase all demo records?'))return;chain=null;localStorage.removeItem('ac_chain');await initChain();initWallet();renderChain()};
+(async()=>{await initChain();initWallet()})();
+</script></body></html>
